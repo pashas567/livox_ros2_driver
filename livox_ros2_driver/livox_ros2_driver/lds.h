@@ -40,6 +40,7 @@
 
 #include "livox_def.h"
 
+#include "clock_mapper.h"
 namespace livox_ros {
 
 /** Max lidar data source num */
@@ -420,6 +421,7 @@ class Semaphore {
  */
 class Lds {
  public:
+  LivoxClockMapper clock_mappers_[kMaxSourceLidar];
   Lds(uint32_t buffer_time_ms, uint8_t data_src);
   virtual ~Lds();
 

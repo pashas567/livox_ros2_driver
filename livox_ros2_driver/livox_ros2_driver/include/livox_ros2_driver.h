@@ -37,6 +37,7 @@
   "." GET_STRING(LIVOX_ROS_DRIVER_VER_MINOR) "." GET_STRING( \
       LIVOX_ROS_DRIVER_VER_PATCH)
 
+#include <std_msgs/msg/string.hpp>
 #include <future>
 #include <memory>
 #include <thread>
@@ -57,6 +58,8 @@ public:
   ~LivoxDriver();
 
 private:
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr clock_publisher_;
+  rclcpp::TimerBase::SharedPtr clock_timer_;
   void pollThread();
 
   std::unique_ptr<Lddc> lddc_ptr_;

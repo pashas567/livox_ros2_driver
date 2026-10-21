@@ -85,9 +85,9 @@ uint64_t GetStoragePacketTimestamp(StoragePacket *packet, uint8_t data_src) {
       return timestamp.stamp;
     }
   } else if (raw_packet->timestamp_type == kTimestampTypeNoSync) {
-    return timestamp.stamp;
+    return data_src == kSourceLvxFile ? timestamp.stamp : timestamp.stamp + packet->time_rcv;
   } else if (raw_packet->timestamp_type == kTimestampTypePtp) {
-    return timestamp.stamp;
+    return data_src == kSourceLvxFile ? timestamp.stamp : timestamp.stamp + packet->time_rcv;
   } else if (raw_packet->timestamp_type == kTimestampTypePpsGps) {
     struct tm time_utc;
     time_utc.tm_isdst = 0;
@@ -648,6 +648,13 @@ void Lds::StorageRawPacket(uint8_t handle, LivoxEthPacket* eth_packet) {
     return;
   }
 
+  const auto wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+  const auto steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  const int64_t packet_offset = clock_mappers_[handle].Offset(timestamp,
+      eth_packet->timestamp_type, eth_packet->data_type == kImu, wall_ns, steady_ns);
+
   if (kImu != eth_packet->data_type) {
     UpdateLidarInfoByEthPacket(p_lidar, eth_packet);
     if (eth_packet->timestamp_type == kTimestampTypePps) {
@@ -673,7 +680,7 @@ void Lds::StorageRawPacket(uint8_t handle, LivoxEthPacket* eth_packet) {
     if (!QueueIsFull(p_queue)) {
       QueuePushAny(p_queue, (uint8_t *)eth_packet,
           GetEthPacketLen(eth_packet->data_type),
-          packet_statistic->timebase,
+          eth_packet->timestamp_type == kTimestampTypePps ? packet_statistic->timebase : packet_offset,
           GetPointsPerPacket(eth_packet->data_type));
       if (QueueUsedSize(p_queue) > p_lidar->onetime_publish_packets) {
         if (semaphore_.GetCount() <= 0) {
@@ -704,7 +711,7 @@ void Lds::StorageRawPacket(uint8_t handle, LivoxEthPacket* eth_packet) {
     if (!QueueIsFull(p_queue)) {
       QueuePushAny(p_queue, (uint8_t *)eth_packet,
           GetEthPacketLen(eth_packet->data_type),
-          packet_statistic->imu_timebase,
+          eth_packet->timestamp_type == kTimestampTypePps ? packet_statistic->imu_timebase : packet_offset,
           GetPointsPerPacket(eth_packet->data_type));
     }
   }
