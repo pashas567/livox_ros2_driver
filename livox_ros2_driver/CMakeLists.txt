@@ -80,6 +80,10 @@ target_link_libraries(${PROJECT_NAME}
 	${Boost_LIBRARY}
 	${PCL_LIBRARIES}
 )
+# SDK1 bundles a different spdlog ABI from ROS. Keep archive symbols local so
+# its logger and shared_ptr destructors cannot bind to the system spdlog.
+set_property(TARGET ${PROJECT_NAME} APPEND_STRING PROPERTY LINK_FLAGS
+  " -Wl,--exclude-libs,liblivox_sdk_static.a")
 #  ${sensor_msgs_LIBRARIES}
 #  ${std_msgs_LIBRARIES}
 #  ${Boost_SYSTEM_LIBRARY}
@@ -97,6 +101,15 @@ if(BUILD_TESTING)
   target_include_directories(test_imu_delivery PRIVATE ${livox_sdk_INCLUDE_DIRS})
   target_compile_definitions(test_imu_delivery PRIVATE
     TEST_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test/no_device_config.json")
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME test_process_shutdown
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test/test_process_shutdown.py
+      --executable $<TARGET_FILE:${PROJECT_NAME}_node>
+      --config ${CMAKE_CURRENT_SOURCE_DIR}/test/no_device_config.json)
+  set_tests_properties(test_imu_delivery test_process_shutdown PROPERTIES
+    RESOURCE_LOCK livox_sdk_udp_ports)
+  set_tests_properties(test_process_shutdown PROPERTIES TIMEOUT 15)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # uncomment the line when a copyright and license is not present in all source files
