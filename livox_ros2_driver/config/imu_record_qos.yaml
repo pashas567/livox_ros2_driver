@@ -1,0 +1,10 @@
+/livox/imu:
+  history: keep_last
+  depth: 2048
+  reliability: reliable
+  durability: volatile
+/livox/clock_status:
+  history: keep_last
+  depth: 100
+  reliability: reliable
+  durability: volatile

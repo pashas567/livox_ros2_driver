@@ -36,7 +36,9 @@ Cloud callbacks receive serialized bytes; point deserialization happens only
 after measurement. The IMU subscription is RELIABLE with depth 2048.
 
 In a separate recording terminal/tmux pane, record /livox/imu and
-/livox/clock_status to an MCAP bag, covering the entire measurement. Then run:
+/livox/clock_status to an MCAP bag, covering the entire measurement. Use
+--qos-profile-overrides-path config/imu_record_qos.yaml so the independent
+recorder can retain delayed samples. Then run:
   python3 scripts/compare_imu_bag.py --csv /tmp/imu_run/imu.csv \
     --bag /path/to/imu_bag --output /tmp/imu_comparison.json
 
@@ -45,3 +47,21 @@ gap percentiles/maxima and measurement age as well. Nominal missing-slot counts
 estimate source-time gaps; clock discontinuities must be investigated separately
 and are not evidence of queue loss. A snapshot clock_status fault remains
 latched by the existing clock mapper until the driver process is restarted.
+
+Fast DDS publication mode
+
+For rmw_fastrtps_cpp, launch the driver with:
+  RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS ros2 launch ...
+
+The C++ component leaves RMW configuration to its host. Configure the variable
+before creating the ROS context, or set it in the launch Node's additional_env
+for an executable. This retains RELIABLE QoS and source timestamps. Explicit
+XML QoS overrides take precedence; check the actual process environment.
+
+In a physical AVIA test, synchronous rcl_publish blocked for 331-333 ms when
+new subscribers joined. IMU and cloud queues accumulated despite independent
+workers. A 90-second asynchronous trial with eight subscriber join/leave cycles
+had a maximum IMU callback gap of 14.74 ms and no missing source slots; all
+18,271 samples matched the independent bag. Longer validation remains required
+for the target workload. Details of the RMW setting:
+https://github.com/ros2/rmw_fastrtps/blob/humble/README.md#change-publication-mode
