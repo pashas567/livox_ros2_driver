@@ -561,6 +561,7 @@ Lds::~Lds() {
 }
 
 void Lds::ResetLidar(LidarDevice *lidar, uint8_t data_src) {
+  std::lock_guard<std::mutex> lock(imu_queue_mutex_);
   DeInitQueue(&lidar->data);
   DeInitQueue(&lidar->imu_data);
 
@@ -587,11 +588,37 @@ void Lds::ResetLds(uint8_t data_src) {
 
 void Lds::RequestExit() {
   request_exit_ = true;
+  semaphore_.SignalOnce();
+  imu_semaphore_.SignalOnce();
+}
+
+bool Lds::PopImuPacket(uint8_t handle, ImuPacket *packet) {
+  std::lock_guard<std::mutex> lock(imu_queue_mutex_);
+  LidarDevice &lidar = lidars_[handle];
+  LidarDataQueue &queue = lidar.imu_data;
+  if (!queue.storage_packet || QueueIsEmpty(&queue)) {
+    return false;
+  }
+  QueuePop(&queue, &packet->storage);
+  packet->timestamp_ns =
+      GetStoragePacketTimestamp(&packet->storage, lidar.data_src);
+  packet->broadcast_code = lidar.info.broadcast_code;
+  return true;
+}
+
+uint32_t Lds::GetImuQueueSize(uint8_t handle) {
+  std::lock_guard<std::mutex> lock(imu_queue_mutex_);
+  return QueueUsedSize(&lidars_[handle].imu_data);
+}
+
+uint64_t Lds::GetImuDroppedPackets(uint8_t handle) {
+  std::lock_guard<std::mutex> lock(imu_queue_mutex_);
+  return imu_dropped_packets_[handle];
 }
 
 bool Lds::IsAllQueueEmpty() {
   for (int i = 0; i < lidar_count_; i++) {
-    if (!QueueIsEmpty(&lidars_[i].data)) {
+    if (!QueueIsEmpty(&lidars_[i].data) || GetImuQueueSize(i) != 0) {
       return false;
     }
   }
@@ -635,6 +662,9 @@ void Lds::UpdateLidarInfoByEthPacket(LidarDevice *p_lidar, \
 }
 
 void Lds::StorageRawPacket(uint8_t handle, LivoxEthPacket* eth_packet) {
+  if (IsRequestExit()) {
+    return;
+  }
   LidarDevice *p_lidar = &lidars_[handle];
   LidarPacketStatistic *packet_statistic = &p_lidar->statistic_info;
   LdsStamp cur_timestamp;
@@ -683,12 +713,11 @@ void Lds::StorageRawPacket(uint8_t handle, LivoxEthPacket* eth_packet) {
           eth_packet->timestamp_type == kTimestampTypePps ? packet_statistic->timebase : packet_offset,
           GetPointsPerPacket(eth_packet->data_type));
       if (QueueUsedSize(p_queue) > p_lidar->onetime_publish_packets) {
-        if (semaphore_.GetCount() <= 0) {
-          semaphore_.Signal();
-        }
+        semaphore_.SignalOnce();
       }
     }
   } else {
+    std::lock_guard<std::mutex> lock(imu_queue_mutex_);
     if (eth_packet->timestamp_type == kTimestampTypePps) {
       /** Whether a new sync frame */
       if ((cur_timestamp.stamp < packet_statistic->last_imu_timestamp) &&
@@ -703,7 +732,7 @@ void Lds::StorageRawPacket(uint8_t handle, LivoxEthPacket* eth_packet) {
 
     LidarDataQueue *p_queue = &p_lidar->imu_data;
     if (nullptr == p_queue->storage_packet) {
-      uint32_t queue_size = 256;  /* fixed imu data queue size */
+      uint32_t queue_size = kImuEthPacketQueueSize;
       InitQueue(p_queue, queue_size);
       printf("Lidar[%02d][%s] imu storage queue size : %d %d\n", p_lidar->handle,
              p_lidar->info.broadcast_code, queue_size, p_queue->size);
@@ -713,6 +742,9 @@ void Lds::StorageRawPacket(uint8_t handle, LivoxEthPacket* eth_packet) {
           GetEthPacketLen(eth_packet->data_type),
           eth_packet->timestamp_type == kTimestampTypePps ? packet_statistic->imu_timebase : packet_offset,
           GetPointsPerPacket(eth_packet->data_type));
+      imu_semaphore_.SignalOnce();
+    } else {
+      ++imu_dropped_packets_[handle];
     }
   }
 }

@@ -56,11 +56,7 @@ Lddc::Lddc(int format, int multi_topic, int data_src, int output_type,
 #endif
 }
 
-Lddc::~Lddc() {
-  if (lds_) {
-    lds_->PrepareExit();
-  }
-}
+Lddc::~Lddc() { PrepareExit(); }
 
 int32_t Lddc::GetPublishStartTime(LidarDevice *lidar, LidarDataQueue *queue,
                                   uint64_t *start_time,
@@ -466,42 +462,28 @@ uint32_t Lddc::PublishCustomPointcloud(LidarDataQueue *queue,
   return published_packet;
 }
 
-uint32_t Lddc::PublishImuData(LidarDataQueue *queue, uint32_t packet_num,
-                              uint8_t handle) {
-  uint64_t timestamp = 0;
-  uint32_t published_packet = 0;
-
+void Lddc::PublishImuData(const ImuPacket &packet, uint8_t handle) {
   sensor_msgs::msg::Imu imu_data;
   imu_data.header.frame_id = "livox_frame";
 
-  uint8_t data_source = lds_->lidars_[handle].data_src;
-  StoragePacket storage_packet;
-  QueuePrePop(queue, &storage_packet);
-  LivoxEthPacket *raw_packet =
-      reinterpret_cast<LivoxEthPacket *>(storage_packet.raw_data);
-  timestamp = GetStoragePacketTimestamp(&storage_packet, data_source);
-  if (timestamp) {
-    imu_data.header.stamp =
-        rclcpp::Time(timestamp);  // to ros time stamp
+  const LivoxEthPacket *raw_packet =
+      reinterpret_cast<const LivoxEthPacket *>(packet.storage.raw_data);
+  if (packet.timestamp_ns) {
+    imu_data.header.stamp = rclcpp::Time(packet.timestamp_ns);
   }
 
-  uint8_t point_buf[2048];
-  LivoxImuDataProcess(point_buf, raw_packet);
-
-  LivoxImuPoint *imu = (LivoxImuPoint *)point_buf;
-  imu_data.angular_velocity.x = imu->gyro_x;
-  imu_data.angular_velocity.y = imu->gyro_y;
-  imu_data.angular_velocity.z = imu->gyro_z;
-  imu_data.linear_acceleration.x = imu->acc_x;
-  imu_data.linear_acceleration.y = imu->acc_y;
-  imu_data.linear_acceleration.z = imu->acc_z;
-
-  QueuePopUpdate(queue);
-  ++published_packet;
+  LivoxImuPoint imu;
+  memcpy(&imu, raw_packet->data, sizeof(imu));
+  imu_data.angular_velocity.x = imu.gyro_x;
+  imu_data.angular_velocity.y = imu.gyro_y;
+  imu_data.angular_velocity.z = imu.gyro_z;
+  imu_data.linear_acceleration.x = imu.acc_x;
+  imu_data.linear_acceleration.y = imu.acc_y;
+  imu_data.linear_acceleration.z = imu.acc_z;
 
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr publisher =
-      std::dynamic_pointer_cast<rclcpp::Publisher
-      <sensor_msgs::msg::Imu>>(GetCurrentImuPublisher(handle));
+      std::dynamic_pointer_cast<rclcpp::Publisher<sensor_msgs::msg::Imu>>(
+          GetCurrentImuPublisher(handle, packet.broadcast_code));
   if (kOutputToRos == output_type_) {
     publisher->publish(imu_data);
   } else {
@@ -510,14 +492,14 @@ uint32_t Lddc::PublishImuData(LidarDataQueue *queue, uint32_t packet_num,
       bag_->write(p_publisher->getTopic(), rclcpp::Time(timestamp),
                   imu_data);
     }
-#endif    
+#endif
   }
-  return published_packet;
 }
 
 int Lddc::RegisterLds(Lds *lds) {
   if (lds_ == nullptr) {
     lds_ = lds;
+    lds_->CleanRequestExit();
     return 0;
   } else {
     return -1;
@@ -547,13 +529,10 @@ void Lddc::PollingLidarPointCloudData(uint8_t handle, LidarDevice *lidar) {
   }
 }
 
-void Lddc::PollingLidarImuData(uint8_t handle, LidarDevice *lidar) {
-  LidarDataQueue *p_queue = &lidar->imu_data;
-  if (p_queue->storage_packet == nullptr) {
-    return;
-  }
-  while (!QueueIsEmpty(p_queue)) {
-    PublishImuData(p_queue, 1, handle);
+void Lddc::PollingLidarImuData(uint8_t handle) {
+  ImuPacket packet;
+  while (!lds_->IsRequestExit() && lds_->PopImuPacket(handle, &packet)) {
+    PublishImuData(packet, handle);
   }
 }
 
@@ -562,6 +541,9 @@ void Lddc::DistributeLidarData(void) {
     return;
   }
   lds_->semaphore_.Wait();
+  if (lds_->IsRequestExit()) {
+    return;
+  }
   for (uint32_t i = 0; i < lds_->lidar_count_; i++) {
     uint32_t lidar_id = i;
     LidarDevice *lidar = &lds_->lidars_[lidar_id];
@@ -571,11 +553,19 @@ void Lddc::DistributeLidarData(void) {
       continue;
     }
     PollingLidarPointCloudData(lidar_id, lidar);
-    PollingLidarImuData(lidar_id, lidar);
   }
+}
 
+void Lddc::DistributeImuData(void) {
+  if (lds_ == nullptr) {
+    return;
+  }
+  lds_->imu_semaphore_.Wait();
   if (lds_->IsRequestExit()) {
-    PrepareExit();
+    return;
+  }
+  for (uint32_t handle = 0; handle < kMaxSourceLidar; ++handle) {
+    PollingLidarImuData(handle);
   }
 }
 
@@ -634,14 +624,15 @@ std::shared_ptr<rclcpp::PublisherBase> Lddc::GetCurrentPublisher(uint8_t handle)
   }
 }
 
-std::shared_ptr<rclcpp::PublisherBase> Lddc::GetCurrentImuPublisher(uint8_t handle) {
+std::shared_ptr<rclcpp::PublisherBase> Lddc::GetCurrentImuPublisher(
+    uint8_t handle, const std::string &broadcast_code) {
   uint32_t queue_size = kMinEthPacketQueueSize;
   if (use_multi_topic_) {
     if (!private_imu_pub_[handle]) {
       char name_str[48];
       memset(name_str, 0, sizeof(name_str));
       snprintf(name_str, sizeof(name_str), "livox/imu_%s",
-          lds_->lidars_[handle].info.broadcast_code);
+               broadcast_code.c_str());
       std::string topic_name(name_str);
       queue_size = queue_size * 2; // queue size is 64 for only one lidar
       private_imu_pub_[handle] = CreatePublisher(kLivoxImuMsg, topic_name,

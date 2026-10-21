@@ -65,7 +65,7 @@ class LdsLvx : public Lds {
   OutPacketBuffer packets_of_frame_;
   std::shared_ptr<LvxFileHandle> lvx_file_;
   std::shared_ptr<std::thread> t_read_lvx_;
-  volatile bool start_read_lvx_;
+  std::atomic<bool> start_read_lvx_;
 };
 
 }  // namespace livox_ros

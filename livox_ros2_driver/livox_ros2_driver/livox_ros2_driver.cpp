@@ -22,38 +22,28 @@
 // SOFTWARE.
 //
 
+#include "include/livox_ros2_driver.h"
+
 #include <chrono>
-#include <csignal>
-#include <future>
 #include <memory>
 #include <thread>
 #include <vector>
-
-#include "include/livox_ros2_driver.h"
-
-#include "rclcpp/rclcpp.hpp"
-#include "pcl_conversions/pcl_conversions.h"
-#include "sensor_msgs/msg/point_cloud2.hpp"
-#include "sensor_msgs/msg/imu.hpp"
-
 
 #include "lddc.h"
 #include "lds_hub.h"
 #include "lds_lidar.h"
 #include "lds_lvx.h"
-#include "livox_sdk.h"
-#include "livox_interfaces/msg/custom_point.h"
 #include "livox_interfaces/msg/custom_msg.h"
+#include "livox_interfaces/msg/custom_point.h"
+#include "livox_sdk.h"
+#include "pcl_conversions/pcl_conversions.h"
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/imu.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
 
 namespace
 {
   const int32_t kSdkVersionMajorLimit = 2;
-
-  inline void SignalHandler(int signum)
-  {
-    rclcpp::shutdown();
-    exit(signum);
-  }
 }
 
 namespace livox_ros
@@ -63,8 +53,6 @@ LivoxDriver::LivoxDriver(const rclcpp::NodeOptions & node_options)
 {
   RCLCPP_INFO(this->get_logger(), "Livox Ros Driver Version: %s",
     LIVOX_ROS_DRIVER_VERSION_STRING);
-
-  signal(SIGINT, SignalHandler);
 
   /** Check sdk version */
   LivoxSdkVersion _sdkversion;
@@ -109,8 +97,6 @@ LivoxDriver::LivoxDriver(const rclcpp::NodeOptions & node_options)
     publish_freq = publish_freq;
   }
 
-  future_ = exit_signal_.get_future();
-
   /** Lidar data distribute control and lidar data source set */
   lddc_ptr_ =
     std::make_unique<Lddc>(xfer_format, multi_topic, data_src, output_type, publish_freq, frame_id);
@@ -151,7 +137,10 @@ LivoxDriver::LivoxDriver(const rclcpp::NodeOptions & node_options)
           value.pop_back();
           auto& device = read_lidar->lidars_[i];
           value += ",\"cloud_queue_packets\":" + std::to_string(device.data.storage_packet ? QueueUsedSize(&device.data) : 0);
-          value += ",\"imu_queue_packets\":" + std::to_string(device.imu_data.storage_packet ? QueueUsedSize(&device.imu_data) : 0) + "}";
+          value += ",\"imu_queue_packets\":" +
+                   std::to_string(read_lidar->GetImuQueueSize(i));
+          value += ",\"imu_dropped_packets\":" +
+                   std::to_string(read_lidar->GetImuDroppedPackets(i)) + "}";
           if (!devices.empty()) devices += ',';
           devices += value;
         }
@@ -218,23 +207,43 @@ LivoxDriver::LivoxDriver(const rclcpp::NodeOptions & node_options)
     } while (0);
   }
 
-  poll_thread_ = std::make_shared<std::thread>(&LivoxDriver::pollThread, this);
+  if (lddc_ptr_->lds_) {
+    poll_thread_ =
+        std::make_shared<std::thread>(&LivoxDriver::pollThread, this);
+    imu_thread_ = std::make_shared<std::thread>(&LivoxDriver::imuThread, this);
+  }
 }
 
 LivoxDriver::~LivoxDriver()
 {
-  exit_signal_.set_value();
-  poll_thread_->join();
+  if (clock_timer_) {
+    clock_timer_->cancel();
+  }
+  if (lddc_ptr_ && lddc_ptr_->lds_) {
+    lddc_ptr_->lds_->RequestExit();
+  }
+  if (poll_thread_ && poll_thread_->joinable()) {
+    poll_thread_->join();
+  }
+  if (imu_thread_ && imu_thread_->joinable()) {
+    imu_thread_->join();
+  }
+  if (lddc_ptr_) {
+    lddc_ptr_->PrepareExit();
+  }
 }
 
 void LivoxDriver::pollThread()
 {
-  std::future_status status;
-
-  do {
+  while (rclcpp::ok() && !lddc_ptr_->lds_->IsRequestExit()) {
     lddc_ptr_->DistributeLidarData();
-    status = future_.wait_for(std::chrono::seconds(0));
-  } while (status == std::future_status::timeout);
+  }
+}
+
+void LivoxDriver::imuThread() {
+  while (rclcpp::ok() && !lddc_ptr_->lds_->IsRequestExit()) {
+    lddc_ptr_->DistributeImuData();
+  }
 }
 }  // namespace livox_ros
 

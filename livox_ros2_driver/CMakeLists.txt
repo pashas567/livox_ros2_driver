@@ -91,6 +91,12 @@ rclcpp_components_register_node(${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_imu_delivery test/test_imu_delivery.cpp TIMEOUT 20)
+  target_link_libraries(test_imu_delivery ${PROJECT_NAME})
+  target_include_directories(test_imu_delivery PRIVATE ${livox_sdk_INCLUDE_DIRS})
+  target_compile_definitions(test_imu_delivery PRIVATE
+    TEST_CONFIG_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test/no_device_config.json")
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # uncomment the line when a copyright and license is not present in all source files

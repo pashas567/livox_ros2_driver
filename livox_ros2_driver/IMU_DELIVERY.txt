@@ -1,0 +1,43 @@
+Independent IMU delivery (SDK1 / AVIA)
+
+The SDK callback enqueues IMU packets and signals imu_semaphore_. A dedicated
+worker drains that queue. The point-cloud worker no longer consumes IMU, so
+publish_freq continues to control clouds without delaying IMU publication.
+
+SignalOnce coalesces wake-ups under the semaphore mutex. IMU queue operations,
+reset and diagnostic reads share a source-level mutex. A popped ImuPacket owns
+its bytes, timestamp and device name; ROS publication runs outside that mutex.
+The existing timestamp mapping, IMU values, frames and publisher QoS are kept.
+The clock_status JSON adds imu_dropped_packets, cumulative per device handle
+for the lifetime of the source. Queue capacity remains 256 packets.
+
+Shutdown sets an atomic exit flag and wakes both workers. The node joins them
+before stopping the SDK. SIGINT uses the application's rclcpp handler, rather
+than installing a process-wide handler that calls exit() from a component.
+
+Build with BUILD_TESTING=ON and run:
+  colcon test --packages-select livox_ros2_driver \
+    --ctest-args -R '^test_imu_delivery$' --output-on-failure
+
+Tests cover IMU-only input, payload/timestamp preservation, overflow, queue
+wraparound under concurrent access, coalesced wake-ups, shutdown wake-ups and
+component unload/reload with an explicit nonexistent device whitelist.
+
+Measure on the driver host, with its ROS environment sourced:
+  python3 scripts/measure_imu_delivery.py --seconds 60 --output /tmp/imu_run
+
+The probe expects /livox/lidar to use CustomMsg (xfer_format=1). It records
+monotonic callback time, system receive time and source timestamps separately.
+Cloud callbacks receive serialized bytes; point deserialization happens only
+after measurement. The IMU subscription is RELIABLE with depth 2048.
+
+In a separate recording terminal/tmux pane, record /livox/imu and
+/livox/clock_status to an MCAP bag, covering the entire measurement. Then run:
+  python3 scripts/compare_imu_bag.py --csv /tmp/imu_run/imu.csv \
+    --bag /path/to/imu_bag --output /tmp/imu_comparison.json
+
+Average topic rate alone does not establish timely delivery. Inspect callback
+gap percentiles/maxima and measurement age as well. Nominal missing-slot counts
+estimate source-time gaps; clock discontinuities must be investigated separately
+and are not evidence of queue loss. A snapshot clock_status fault remains
+latched by the existing clock mapper until the driver process is restarted.

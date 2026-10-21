@@ -62,6 +62,7 @@ class Lddc {
 
   int RegisterLds(Lds *lds);
   void DistributeLidarData(void);
+  void DistributeImuData(void);
   void CreateBagFile(const std::string &file_name);
   void PrepareExit(void);
 
@@ -82,15 +83,15 @@ class Lddc {
                                  uint8_t handle);
   uint32_t PublishCustomPointcloud(LidarDataQueue *queue, uint32_t packet_num,
                                    uint8_t handle);
-  uint32_t PublishImuData(LidarDataQueue *queue, uint32_t packet_num,
-                          uint8_t handle);
+  void PublishImuData(const ImuPacket &packet, uint8_t handle);
 
   std::shared_ptr<rclcpp::PublisherBase> CreatePublisher(uint8_t msg_type,
     std::string &topic_name, uint32_t queue_size);
   std::shared_ptr<rclcpp::PublisherBase> GetCurrentPublisher(uint8_t handle);
-  std::shared_ptr<rclcpp::PublisherBase> GetCurrentImuPublisher(uint8_t handle);
+  std::shared_ptr<rclcpp::PublisherBase> GetCurrentImuPublisher(
+      uint8_t handle, const std::string &broadcast_code);
   void PollingLidarPointCloudData(uint8_t handle, LidarDevice *lidar);
-  void PollingLidarImuData(uint8_t handle, LidarDevice *lidar);
+  void PollingLidarImuData(uint8_t handle);
   void InitPointcloud2MsgHeader(sensor_msgs::msg::PointCloud2& cloud);
   void FillPointsToPclMsg(PointCloud& pcl_msg,
       LivoxPointXyzrtl* src_point, uint32_t num);

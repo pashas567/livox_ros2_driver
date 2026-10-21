@@ -31,16 +31,16 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <string>
 #include <vector>
-#include <mutex>
-#include <condition_variable>
-
-#include "ldq.h"
-
-#include "livox_def.h"
 
 #include "clock_mapper.h"
+#include "ldq.h"
+#include "livox_def.h"
 namespace livox_ros {
 
 /** Max lidar data source num */
@@ -406,14 +406,30 @@ class Semaphore {
     --count_;
   }
 
+  // A consumer drains its queue on wake-up; one pending wake-up is enough.
+  void SignalOnce() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    if (count_ == 0) {
+      count_ = 1;
+      cv_.notify_one();
+    }
+  }
+
   int GetCount() {
+    std::unique_lock<std::mutex> lock(mutex_);
     return count_;
   }
 
  private:
   std::mutex mutex_;
   std::condition_variable cv_;
-  volatile int count_;
+  int count_;
+};
+
+struct ImuPacket {
+  StoragePacket storage;
+  uint64_t timestamp_ns;
+  std::string broadcast_code;
 };
 
 /**
@@ -427,10 +443,14 @@ class Lds {
 
   void StorageRawPacket(uint8_t handle, LivoxEthPacket* eth_packet);
   uint8_t GetDeviceType(uint8_t handle);
-  static void ResetLidar(LidarDevice *lidar, uint8_t data_src);
+  void ResetLidar(LidarDevice *lidar, uint8_t data_src);
   static void SetLidarDataSrc(LidarDevice *lidar, uint8_t data_src);
   void ResetLds(uint8_t data_src);
   void RequestExit();
+  // The copied packet owns its bytes; callers publish after releasing the lock.
+  bool PopImuPacket(uint8_t handle, ImuPacket *packet);
+  uint32_t GetImuQueueSize(uint8_t handle);
+  uint64_t GetImuDroppedPackets(uint8_t handle);
   bool IsAllQueueEmpty();
   bool IsAllQueueReadStop();
   void CleanRequestExit() { request_exit_ = false; }
@@ -439,15 +459,18 @@ class Lds {
   void UpdateLidarInfoByEthPacket(LidarDevice *p_lidar, \
       LivoxEthPacket* eth_packet);
   uint8_t lidar_count_;                 /**< Lidar access handle. */
-  LidarDevice lidars_[kMaxSourceLidar]; /**< The index is the handle */
+  LidarDevice lidars_[kMaxSourceLidar]{}; /**< The index is the handle */
   Semaphore semaphore_;
+  Semaphore imu_semaphore_;
 
  protected:
   uint32_t buffer_time_ms_; /**< Buffer time before data in queue is read */
   uint8_t data_src_;
 
  private:
-  volatile bool request_exit_;
+  std::atomic<bool> request_exit_;
+  std::mutex imu_queue_mutex_;
+  uint64_t imu_dropped_packets_[kMaxSourceLidar]{};
 };
 
 }  // namespace livox_ros

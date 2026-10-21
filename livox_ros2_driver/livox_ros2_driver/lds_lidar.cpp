@@ -143,6 +143,7 @@ int LdsLidar::DeInitLdsLidar(void) {
   }
 
   Uninit();
+  is_initialized_ = false;
   printf("Livox SDK Deinit completely!\n");
 
   if (timesync_) {
@@ -246,7 +247,7 @@ void LdsLidar::OnDeviceChange(const DeviceInfo *info, DeviceEvent type) {
     }
   } else if (type == kEventDisconnect) {
     printf("Lidar[%s] disconnect!\n", info->broadcast_code);
-    ResetLidar(p_lidar, kSourceRawLidar);
+    g_lds_ldiar->ResetLidar(p_lidar, kSourceRawLidar);
   } else if (type == kEventStateChange) {
     p_lidar->info = *info;
   }

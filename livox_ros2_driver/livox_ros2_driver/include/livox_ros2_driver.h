@@ -37,14 +37,12 @@
   "." GET_STRING(LIVOX_ROS_DRIVER_VER_MINOR) "." GET_STRING( \
       LIVOX_ROS_DRIVER_VER_PATCH)
 
-#include <std_msgs/msg/string.hpp>
-#include <future>
 #include <memory>
+#include <std_msgs/msg/string.hpp>
 #include <thread>
 
-#include "rclcpp/rclcpp.hpp"
-
 #include "lddc.h"
+#include "rclcpp/rclcpp.hpp"
 
 namespace livox_ros
 {
@@ -61,11 +59,11 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr clock_publisher_;
   rclcpp::TimerBase::SharedPtr clock_timer_;
   void pollThread();
+  void imuThread();
 
   std::unique_ptr<Lddc> lddc_ptr_;
   std::shared_ptr<std::thread> poll_thread_;
-  std::shared_future<void> future_;
-  std::promise<void> exit_signal_;
+  std::shared_ptr<std::thread> imu_thread_;
 };
 
 }  // namespace livox_ros

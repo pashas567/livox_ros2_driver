@@ -50,15 +50,18 @@ LdsLvx::LdsLvx(uint32_t interval_ms) : Lds(interval_ms, kSourceLvxFile) {
 }
 
 LdsLvx::~LdsLvx() {
+  PrepareExit();
   if (packets_of_frame_.packet != nullptr) {
     delete[] packets_of_frame_.packet;
-  }
-  if (t_read_lvx_->joinable()) {
-    t_read_lvx_->join();
   }
 }
 
 void LdsLvx::PrepareExit(void) {
+  StopRead();
+  RequestExit();
+  if (t_read_lvx_ && t_read_lvx_->joinable()) {
+    t_read_lvx_->join();
+  }
   lvx_file_->CloseLvxFile();
   printf("Convert complete, Press [Ctrl+C] to exit!\n");
 }
@@ -135,7 +138,9 @@ int LdsLvx::InitLdsLvx(const char *lvx_path) {
 
 /** Global function in LdsLvx for callback */
 void LdsLvx::ReadLvxFile() {
-  while (!start_read_lvx_);
+  while (!start_read_lvx_ && !IsRequestExit()) {
+    std::this_thread::yield();
+  }
   printf("Start to read lvx file.\n");
 
   int file_state = kLvxFileOk;
@@ -146,7 +151,7 @@ void LdsLvx::ReadLvxFile() {
       uint32_t data_size = packets_of_frame_.data_size;
       uint8_t *packet_base = packets_of_frame_.packet;
       uint32_t data_offset = 0;
-      while (data_offset < data_size) {
+      while (data_offset < data_size && !IsRequestExit()) {
         LivoxEthPacket *eth_packet;
         int32_t handle;
         uint8_t data_type;
@@ -182,15 +187,13 @@ void LdsLvx::ReadLvxFile() {
 
         LidarDataQueue *p_queue = &lidars_[handle].data;
         if (p_queue != nullptr) {
-          while (QueueIsFull(p_queue)) {
+          while (QueueIsFull(p_queue) && !IsRequestExit()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
           }
         }
-        p_queue = &lidars_[handle].imu_data;
-        if (p_queue != nullptr) {
-          while (QueueIsFull(p_queue)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-          }
+        while (GetImuQueueSize(handle) >= kImuEthPacketQueueSize &&
+               !IsRequestExit()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
       }
     } else {
@@ -209,11 +212,10 @@ void LdsLvx::ReadLvxFile() {
   }
   printf("Wait for file conversion to complete!\n");
   int32_t wait_cnt = 5;
-  while (!IsAllQueueEmpty()) {
+  while (!IsRequestExit() && !IsAllQueueEmpty()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(40));
-    if (semaphore_.GetCount() <= 0) {
-      semaphore_.Signal();
-    }
+    semaphore_.SignalOnce();
+    imu_semaphore_.SignalOnce();
     if (IsAllQueueReadStop()) {
       --wait_cnt;
       if (wait_cnt <= 0) {
@@ -223,10 +225,6 @@ void LdsLvx::ReadLvxFile() {
   }
 
   RequestExit();
-  while(semaphore_.GetCount() > 0) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
-  semaphore_.Signal();
 }
 
 }  // namespace livox_ros

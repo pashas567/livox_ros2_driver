@@ -110,7 +110,7 @@ class LdsHub : public Lds {
   volatile bool is_initialized_;
   char broadcast_code_whitelist_[kMaxLidarCount][kBroadcastCodeSize];
 
-  LidarDevice hub_;
+  LidarDevice hub_{};
 
   std::vector<UserRawConfig> lidar_raw_config_;
   UserRawConfig hub_raw_config_;

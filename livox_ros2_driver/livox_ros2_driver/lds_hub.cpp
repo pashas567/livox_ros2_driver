@@ -130,6 +130,7 @@ int LdsHub::DeInitLdsHub(void) {
   }
 
   Uninit();
+  is_initialized_ = false;
   printf("Livox SDK Deinit completely!\n");
 
   return 0;
